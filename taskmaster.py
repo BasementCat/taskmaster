@@ -29,7 +29,7 @@ class Task(object):
     ws_re = re.compile(ur'\s+')
     date_re = re.compile(ur'^\d{4}-\d{2}-\d{2}')
 
-    def __init__(self, description, completed=False, priority=None, created_at=None, completed_at=None, projects=None, contexts=None, tags=None, id=None):
+    def __init__(self, description, completed=False, priority=None, created_at=None, completed_at=None, projects=None, contexts=None, tags=None, id=None, parse_description=False):
         self.description = description
         self.completed = completed
         self.priority = priority
@@ -39,6 +39,29 @@ class Task(object):
         self.contexts = contexts or []
         self.tags = tags or {}
         self.id = id
+
+        if parse_description:
+            d_projects, d_contexts, d_tags = self.parse_description(self.description)
+            self.projects += d_projects
+            self.contexts += d_contexts
+            self.tags.update(d_tags)
+
+    @classmethod
+    def parse_description(self, description):
+        projects = []
+        contexts = []
+        tags = {}
+
+        for candidate in self.ws_re.split(description):
+            if candidate.startswith('+'):
+                projects.append(candidate[1:])
+            elif candidate.startswith('@'):
+                contexts.append(candidate[1:])
+            elif ':' in candidate:
+                k, v = candidate.split(':', 1)
+                tags[k] = v
+
+        return projects, contexts, tags
 
     @classmethod
     def parse(self, line, **kwargs):
@@ -82,18 +105,9 @@ class Task(object):
 
         # The rest is description but may include tags
         args['description'] = line
-        for candidate in self.ws_re.split(line):
-            if candidate.startswith('+'):
-                args['projects'].append(candidate[1:])
-            elif candidate.startswith('@'):
-                args['contexts'].append(candidate[1:])
-            elif ':' in candidate:
-                k, v = candidate.split(':', 1)
-                args['tags'][k] = v
-
         args.update(kwargs)
 
-        return self(**args)
+        return self(parse_description=True, **args)
 
     def __str__(self):
         out = ''
@@ -130,6 +144,16 @@ class TodoTxt(object):
 
         self.load()
 
+    def append(self, task):
+        new_id = max([t.id or 0 for t in self.tasks]) + 1
+        task.id = new_id
+        self.tasks.append(task)
+        self.save()
+
+    def print_tasks(self):
+        for task in self.tasks:
+            print task.id, str(task)
+
     def load(self):
         if os.path.exists(self.filename):
             with open(self.filename, 'r') as fp:
@@ -155,8 +179,12 @@ class Command(object):
 
     def __init__(self, prog, config):
         self.parser = argparse.ArgumentParser(prog=prog + ' ' + self.command_name(), description=self.command_doc(), formatter_class=argparse.RawDescriptionHelpFormatter)
+        self.add_parser_args()
         self.config = config
         self.todotxt = TodoTxt(config['todo.txt'])
+
+    def add_parser_args(self):
+        pass
 
     @classmethod
     def command_name(self):
@@ -183,7 +211,7 @@ class Command(object):
 
     def __call__(self, args):
         parsed_args = self.parser.parse_args(args)
-        self.run(args)
+        self.run(parsed_args)
 
     def run(self, args):
         raise NotImplementedError()
@@ -197,8 +225,40 @@ class ListCommand(Command):
     '''
 
     def run(self, args):
-        for task in self.todotxt.tasks:
-            print task.id, str(task)
+        self.todotxt.print_tasks()
+
+
+class AddCommand(Command):
+    '''\
+    Add a new task.
+    '''
+
+    def add_parser_args(self):
+        self.parser.add_argument('description', help="Task description.  Todo.txt projects, contexts, and tags in the description will be parsed.")
+        self.parser.add_argument('-C', '--complete', action='store_true', help="Mark the task as complete")
+        self.parser.add_argument('-P', '--priority', help="Task priority (A-Z)")
+        self.parser.add_argument('--created', help="Alternate created date (YYYY-MM-DD)")
+        self.parser.add_argument('--completed', help="Completed date (YYYY-MM-DD)")
+        self.parser.add_argument('-p', '--project', action='append', help="Specify a project that this task belongs to")
+        self.parser.add_argument('-c', '--context', action='append', help="Specify a context that this task belongs to")
+        self.parser.add_argument('-t', '--tag', nargs=2, action='append', help="Specify a key and value of a tag to add to this task", metavar=('KEY', 'VALUE'))
+
+    def run(self, args):
+        if args.priority:
+            args.priority = 26 - (ord(args.priority) - 65)
+        task = Task(
+            args.description,
+            completed=args.complete,
+            priority=args.priority,
+            created_at=args.created,  # TODO: now
+            completed_at=args.completed,
+            projects=args.project,
+            contexts=args.context,
+            tags=dict(args.tag) if args.tag else None,
+            parse_description=True,
+        )
+        self.todotxt.append(task)
+        self.todotxt.print_tasks()
 
 
 def main():
