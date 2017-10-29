@@ -7,6 +7,24 @@ import textwrap
 import sys
 
 
+class Config(dict):
+    def __init__(self):
+        config = {
+            'todo.txt': '~/todo.txt',
+        }
+        filename = os.path.abspath(os.path.normpath(os.path.expanduser('~/.taskmasterrc')))
+        if os.path.exists(filename):
+            kv_re = re.compile(ur'^([^\s:]+)\s*:\s*(.*)$')
+            with open(filename, 'r') as fp:
+                for line in fp:
+                    line = line.strip()
+                    if line:
+                        match = kv_re.match(line)
+                        if match:
+                            config[match.group(0)] = match.group(1) or None
+        super(Config, self).__init__(**config)
+
+
 class Task(object):
     ws_re = re.compile(ur'\s+')
     date_re = re.compile(ur'^\d{4}-\d{2}-\d{2}')
@@ -135,8 +153,10 @@ class Command(object):
     The base for all other commands.
     '''
 
-    def __init__(self, prog):
+    def __init__(self, prog, config):
         self.parser = argparse.ArgumentParser(prog=prog + ' ' + self.command_name(), description=self.command_doc(), formatter_class=argparse.RawDescriptionHelpFormatter)
+        self.config = config
+        self.todotxt = TodoTxt(config['todo.txt'])
 
     @classmethod
     def command_name(self):
@@ -151,13 +171,13 @@ class Command(object):
         return self.command_doc().split('\n')[0]
 
     @classmethod
-    def subcommands(self, prog):
+    def subcommands(self, prog, config):
         out = {}
         queue = [self]
         while queue:
             cls = queue.pop()
             if cls is not self:
-                out[cls.command_name()] = cls(prog)
+                out[cls.command_name()] = cls(prog, config)
             queue += cls.__subclasses__()
         return out
 
@@ -177,12 +197,13 @@ class ListCommand(Command):
     '''
 
     def run(self, args):
-        for task in TodoTxt('~/todo.txt').tasks:
+        for task in self.todotxt.tasks:
             print task.id, str(task)
 
 
 def main():
-    commands = Command.subcommands(sys.argv[0])
+    config = Config()
+    commands = Command.subcommands(sys.argv[0], config)
 
     command_list = '\n'.join(['{} - {}'.format(name, c.command_doc_oneline()) for name, c in commands.items()])
 
