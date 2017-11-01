@@ -162,10 +162,12 @@ class TodoTxt(object):
         self.load()
 
     def append(self, task):
-        new_id = max([t.id or 0 for t in self.tasks]) + 1
+        if self.tasks:
+            new_id = max([t.id or 0 for t in self.tasks]) + 1
+        else:
+            new_id = 1
         task.id = new_id
         self.tasks.append(task)
-        self.save()
 
     def print_tasks(self):
         for task in self.tasks:
@@ -232,6 +234,14 @@ class TMTask(Task):
 
     def __str__(self):
         return self._make_string()
+
+    def append(self, task):
+        if self.subtasks:
+            new_id = max([t.id or 0 for t in self.subtasks]) + 1
+        else:
+            new_id = 1
+        task.id = new_id
+        self.subtasks.append(task)
 
 
 class TMTodoTxt(TodoTxt):
@@ -351,11 +361,12 @@ class AddCommand(Command):
         self.parser.add_argument('-p', '--project', action='append', help="Specify a project that this task belongs to")
         self.parser.add_argument('-c', '--context', action='append', help="Specify a context that this task belongs to")
         self.parser.add_argument('-t', '--tag', nargs=2, action='append', help="Specify a key and value of a tag to add to this task", metavar=('KEY', 'VALUE'))
+        self.parser.add_argument('-s', '--subtask-of', help="Create this task as a subtask of another task")
 
     def run(self, args):
         if args.priority:
             args.priority = 26 - (ord(args.priority) - 65)
-        task = Task(
+        task = TMTask(
             args.description,
             completed=args.complete,
             priority=args.priority,
@@ -366,8 +377,12 @@ class AddCommand(Command):
             tags=dict(args.tag) if args.tag else None,
             parse_description=True,
         )
-        self.todotxt.append(task)
+        if args.subtask_of:
+            self.todotxt.get(args.subtask_of).append(task)
+        else:
+            self.todotxt.append(task)
         self.todotxt.print_tasks()
+        self.todotxt.save()
 
 
 def main():
