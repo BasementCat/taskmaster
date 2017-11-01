@@ -46,6 +46,38 @@ class Config(dict):
         super(Config, self).__init__(**config)
 
 
+class TaskListMixin(object):
+    TASK_LIST_ATTR = 'tasks'
+
+    @property
+    def _tasklist(self):
+        if not hasattr(self, self.TASK_LIST_ATTR):
+            setattr(self, self.TASK_LIST_ATTR, [])
+        return getattr(self, self.TASK_LIST_ATTR)
+
+    def append(self, task):
+        if self._tasklist:
+            new_id = max([t.id or 0 for t in self._tasklist]) + 1
+        else:
+            new_id = 1
+        task.id = new_id
+        self._tasklist.append(task)
+
+    def print_tasks(self):
+        for task in self._tasklist:
+            print task.id, str(task)
+
+    def get(self, id):
+        try:
+            ids = map(lambda v: int(v) - 1, str(id).split('.'))
+            task = self._tasklist[ids.pop(0)]
+            while ids:
+                task = task._tasklist[ids.pop(0)]
+            return task
+        except IndexError:
+            return None
+
+
 class Task(object):
     ws_re = re.compile(ur'\s+')
     date_re = re.compile(ur'^\d{4}-\d{2}-\d{2}')
@@ -152,7 +184,7 @@ class Task(object):
         return out
 
 
-class TodoTxt(object):
+class TodoTxt(TaskListMixin):
     TASK_CLASS = Task
 
     def __init__(self, filename):
@@ -160,18 +192,6 @@ class TodoTxt(object):
         self.tasks = []
 
         self.load()
-
-    def append(self, task):
-        if self.tasks:
-            new_id = max([t.id or 0 for t in self.tasks]) + 1
-        else:
-            new_id = 1
-        task.id = new_id
-        self.tasks.append(task)
-
-    def print_tasks(self):
-        for task in self.tasks:
-            print task.id, str(task)
 
     def load(self):
         if os.path.exists(self.filename):
@@ -190,14 +210,10 @@ class TodoTxt(object):
     def __str__(self):
         return '\n'.join(map(str, self.tasks))
 
-    def get(self, id):
-        try:
-            return self.tasks[id - 1]
-        except IndexError:
-            return None
 
+class TMTask(TaskListMixin, Task):
+    TASK_LIST_ATTR = 'subtasks'
 
-class TMTask(Task):
     def __init__(self, *args, **kwargs):
         self.subtasks = kwargs.pop('subtasks', [])
         depth = kwargs.pop('depth', 0)
@@ -235,14 +251,6 @@ class TMTask(Task):
     def __str__(self):
         return self._make_string()
 
-    def append(self, task):
-        if self.subtasks:
-            new_id = max([t.id or 0 for t in self.subtasks]) + 1
-        else:
-            new_id = 1
-        task.id = new_id
-        self.subtasks.append(task)
-
 
 class TMTodoTxt(TodoTxt):
     TASK_CLASS = TMTask
@@ -258,17 +266,6 @@ class TMTodoTxt(TodoTxt):
 
     def print_tasks(self):
         self._print_task_list(self.tasks)
-
-    def get(self, id):
-        try:
-            ids = map(lambda v: int(v) - 1, str(id).split('.'))
-            task = self.tasks[ids.pop(0)]
-            while ids:
-                task = task.subtasks[ids.pop(0)]
-        except IndexError:
-            return None
-
-        return task
 
 
 class Command(object):
