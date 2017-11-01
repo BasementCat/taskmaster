@@ -61,31 +61,23 @@ class Task(object):
         self.id = id
 
         if parse_description:
-            d_desc, d_projects, d_contexts, d_tags = self.parse_description(self.description)
-            self.description = d_desc
-            self.projects += d_projects
-            self.contexts += d_contexts
-            self.tags.update(d_tags)
+            self.parse_description()
 
-    @classmethod
-    def parse_description(self, description):
+    def parse_description(self):
         new_description = []
-        projects = []
-        contexts = []
-        tags = {}
 
-        for candidate in split_with_ws(description):
+        for candidate in split_with_ws(self.description):
             if candidate.startswith('+') and len(candidate.strip()) > 1:
-                projects.append(candidate[1:].strip())
+                self.projects.append(candidate[1:].strip())
             elif candidate.startswith('@') and len(candidate.strip()) > 1:
-                contexts.append(candidate[1:].strip())
-            elif ':' in candidate and len(candidate.strip()) > 1:
+                self.contexts.append(candidate[1:].strip())
+            elif ':' in candidate and len(candidate.strip()) > 2:
                 k, v = candidate.strip().split(':', 1)
-                tags[k] = v
+                self.tags[k] = v
             else:
                 new_description.append(candidate)
 
-        return ''.join(new_description).strip(), projects, contexts, tags
+        self.description = ''.join(new_description).strip()
 
     @classmethod
     def parse(self, line, **kwargs):
@@ -181,10 +173,12 @@ class TodoTxt(object):
     def load(self):
         if os.path.exists(self.filename):
             with open(self.filename, 'r') as fp:
-                for id, line in enumerate(fp):
+                id = 1
+                for line in fp:
                     line = line.strip()
                     if line:
-                        self.tasks.append(self.TASK_CLASS.parse(line, id=id + 1))
+                        self.tasks.append(self.TASK_CLASS.parse(line, id=id))
+                        id += 1
 
     def save(self):
         with open(self.filename, 'w') as fp:
@@ -192,6 +186,61 @@ class TodoTxt(object):
 
     def __str__(self):
         return '\n'.join(map(str, self.tasks))
+
+
+class TMTask(Task):
+    def __init__(self, *args, **kwargs):
+        self.subtasks = kwargs.pop('subtasks', [])
+        depth = kwargs.pop('depth', 0)
+        parse_description = kwargs.pop('parse_description', False)
+        super(TMTask, self).__init__(*args, **kwargs)
+        if parse_description:
+            self.parse_description(depth=depth)
+
+    def parse_description(self, depth=0):
+        new_description = []
+        found_subtasks = False
+        subtask_id = 1
+        candidates = re.split(ur'(\s+' + ('&&' * (depth + 1)) + '[^&])', self.description)
+        while candidates:
+            candidate = candidates.pop(0)
+            if candidate.strip().startswith('&&' * (depth + 1)):
+                found_subtasks = True
+                candidate = (candidate + candidates.pop(0)).strip().lstrip('&')
+                self.subtasks.append(TMTask.parse(candidate, depth=depth + 1, id=subtask_id))
+                subtask_id += 1
+            elif not found_subtasks:
+                new_description.append(candidate)
+
+        self.description = ''.join(new_description)
+        super(TMTask, self).parse_description()
+
+    def _make_string(self, depth=0, include_subtasks=True):
+        out = super(TMTask, self).__str__()
+        if include_subtasks:
+            if depth > 0:
+                out = ' ' + ('&&' * depth) + out
+            out += ''.join([t._make_string(depth=depth + 1) for t in self.subtasks])
+        return out
+
+    def __str__(self):
+        return self._make_string()
+
+
+class TMTodoTxt(TodoTxt):
+    TASK_CLASS = TMTask
+
+    @classmethod
+    def _print_task_list(self, tasks, depth=0, parent_id=None):
+        for task in tasks:
+            prefix = ''
+            if depth > 0:
+                prefix = ('  ' * depth) + str(parent_id) + '.'
+            print prefix + str(task.id), task._make_string(include_subtasks=False)
+            self._print_task_list(task.subtasks, depth=depth + 1, parent_id=(parent_id + '.' if parent_id else '') + str(task.id))
+
+    def print_tasks(self):
+        self._print_task_list(self.tasks)
 
 
 class Command(object):
@@ -205,7 +254,7 @@ class Command(object):
         self.parser = argparse.ArgumentParser(prog=prog + ' ' + self.command_name(), description=self.command_doc(), formatter_class=argparse.RawDescriptionHelpFormatter)
         self.add_parser_args()
         self.config = config
-        self.todotxt = TodoTxt(config['todo.txt'])
+        self.todotxt = TMTodoTxt(config['todo.txt'])
 
     def add_parser_args(self):
         pass
