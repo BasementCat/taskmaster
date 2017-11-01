@@ -7,6 +7,26 @@ import textwrap
 import sys
 
 
+def split_with_ws(data):
+    out = []
+    token = ''
+    in_ws = False
+    for c in data.strip():
+        if c in (' ', '\t'):
+            in_ws = True
+        elif in_ws:
+            out.append(token)
+            token = ''
+            in_ws = False
+
+        token += c
+
+    if token:
+        out.append(token)
+
+    return out
+
+
 class Config(dict):
     def __init__(self):
         config = {
@@ -41,27 +61,31 @@ class Task(object):
         self.id = id
 
         if parse_description:
-            d_projects, d_contexts, d_tags = self.parse_description(self.description)
+            d_desc, d_projects, d_contexts, d_tags = self.parse_description(self.description)
+            self.description = d_desc
             self.projects += d_projects
             self.contexts += d_contexts
             self.tags.update(d_tags)
 
     @classmethod
     def parse_description(self, description):
+        new_description = []
         projects = []
         contexts = []
         tags = {}
 
-        for candidate in self.ws_re.split(description):
-            if candidate.startswith('+'):
-                projects.append(candidate[1:])
-            elif candidate.startswith('@'):
-                contexts.append(candidate[1:])
-            elif ':' in candidate:
-                k, v = candidate.split(':', 1)
+        for candidate in split_with_ws(description):
+            if candidate.startswith('+') and len(candidate.strip()) > 1:
+                projects.append(candidate[1:].strip())
+            elif candidate.startswith('@') and len(candidate.strip()) > 1:
+                contexts.append(candidate[1:].strip())
+            elif ':' in candidate and len(candidate.strip()) > 1:
+                k, v = candidate.strip().split(':', 1)
                 tags[k] = v
+            else:
+                new_description.append(candidate)
 
-        return projects, contexts, tags
+        return ''.join(new_description).strip(), projects, contexts, tags
 
     @classmethod
     def parse(self, line, **kwargs):
