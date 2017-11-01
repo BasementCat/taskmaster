@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 
+import sys
 import os
 import re
 import argparse
@@ -187,6 +188,12 @@ class TodoTxt(object):
     def __str__(self):
         return '\n'.join(map(str, self.tasks))
 
+    def get(self, id):
+        try:
+            return self.tasks[id - 1]
+        except IndexError:
+            return None
+
 
 class TMTask(Task):
     def __init__(self, *args, **kwargs):
@@ -241,6 +248,17 @@ class TMTodoTxt(TodoTxt):
 
     def print_tasks(self):
         self._print_task_list(self.tasks)
+
+    def get(self, id):
+        try:
+            ids = map(lambda v: int(v) - 1, str(id).split('.'))
+            task = self.tasks[ids.pop(0)]
+            while ids:
+                task = task.subtasks[ids.pop(0)]
+        except IndexError:
+            return None
+
+        return task
 
 
 class Command(object):
@@ -299,6 +317,24 @@ class ListCommand(Command):
 
     def run(self, args):
         self.todotxt.print_tasks()
+
+
+class ShowCommand(Command):
+    '''\
+    Show a task.
+
+    Show a single task.
+    '''
+
+    def add_parser_args(self):
+        self.parser.add_argument('task_id', help="Task ID (1, 2.4, etc)")
+
+    def run(self, args):
+        task = self.todotxt.get(args.task_id)
+        if task:
+            print args.task_id, task._make_string(include_subtasks=False)
+        else:
+            sys.stderr.write("No such task\n")
 
 
 class AddCommand(Command):
