@@ -5,7 +5,20 @@ import os
 import re
 import argparse
 import textwrap
-import sys
+import copy
+from collections import OrderedDict
+
+import pendulum
+from dateutil import rrule
+
+
+pendulum.set_formatter('alternative')
+
+
+def iso8601dt(dt):
+    if not isinstance(dt, pendulum.pendulum.Pendulum):
+        dt = pendulum.parse(dt)
+    return dt.in_timezone('UTC').format('YYYY-MM-DD[T]HH:mm:ss[Z]')
 
 
 def split_with_ws(data):
@@ -183,6 +196,18 @@ class Task(object):
 
         return out
 
+    def clone(self):
+        return self.__class__(
+            self.description,
+            completed=self.completed,
+            priority=self.priority,
+            created_at=self.created_at,
+            completed_at=self.completed_at,
+            projects=self.projects,
+            contexts=self.contexts,
+            tags=self.tags,
+        )
+
 
 class TodoTxt(TaskListMixin):
     TASK_CLASS = Task
@@ -214,13 +239,44 @@ class TodoTxt(TaskListMixin):
 class TMTask(TaskListMixin, Task):
     TASK_LIST_ATTR = 'subtasks'
 
+    def _parse_rrule(self, value):
+        rset = rrule.rruleset()
+        for candidate in value.split(';;'):
+            if candidate.startswith('RRULE:'):
+                rset.rrule(rrule.rrulestr(candidate.replace(';', '\n'), dtstart=self.due or pendulum.utcnow()))
+            elif candidate.startswith('EXRULE:'):
+                rset.exrule(rrule.rrulestr('RRULE:' + candidate[7:].replace(';', '\n'), dtstart=self.due or pendulum.utcnow()))
+            elif candidate.startswith('RDATE:'):
+                rset.rdate(pendulum.parse(candidate[6:]))
+            elif candidate.startswith('EXDATE:'):
+                rset.exdate(pendulum.parse(candidate[7:]))
+        return rset
+
+    def _str_rruleset(self, value):
+        out = []
+        values = [
+            ('RRULE', value._rrule),
+            ('RDATE', value._rdate),
+            ('EXRULE', value._exrule),
+            ('EXDATE', value._exdate),
+        ]
+        for prefix, data in values:
+            for v in data:
+                out.append(prefix + ':' + str(v).replace('\n', ';'))
+        return ';;'.join(out)
+
     def __init__(self, *args, **kwargs):
+        self.TAG_PARSERS = OrderedDict([
+            ('due', (pendulum.parse, iso8601dt)),
+            ('rrule', (self._parse_rrule, self._str_rruleset)),
+        ])
         self.subtasks = kwargs.pop('subtasks', [])
         depth = kwargs.pop('depth', 0)
         parse_description = kwargs.pop('parse_description', False)
         super(TMTask, self).__init__(*args, **kwargs)
         if parse_description:
             self.parse_description(depth=depth)
+        self.parse_tags()
 
     def parse_description(self, depth=0):
         new_description = []
@@ -240,7 +296,21 @@ class TMTask(TaskListMixin, Task):
         self.description = ''.join(new_description)
         super(TMTask, self).parse_description()
 
+    def parse_tags(self):
+        for tag, (parser, _) in self.TAG_PARSERS.items():
+            setattr(self, tag, None)
+            if self.tags.get(tag):
+                setattr(self, tag, parser(self.tags[tag]))
+
     def _make_string(self, depth=0, include_subtasks=True):
+        for tag, (_, stringifier) in self.TAG_PARSERS.items():
+            if getattr(self, tag) is None:
+                if tag in self.tags:
+                    del self.tags[tag]
+            else:
+                # import pudb;pudb.set_trace()
+                self.tags[tag] = stringifier(getattr(self, tag))
+
         out = super(TMTask, self).__str__()
         if include_subtasks:
             if depth > 0:
@@ -250,6 +320,11 @@ class TMTask(TaskListMixin, Task):
 
     def __str__(self):
         return self._make_string()
+
+    def clone(self):
+        out = super(TMTask, self).clone()
+        out.parse_tags()
+        return out
 
 
 class TMTodoTxt(TodoTxt):
@@ -340,6 +415,30 @@ class ShowCommand(Command):
         task = self.todotxt.get(args.task_id)
         if task:
             print args.task_id, task._make_string(include_subtasks=False)
+        else:
+            sys.stderr.write("No such task\n")
+
+
+class NextCommand(Command):
+    '''\
+    '''
+
+    def add_parser_args(self):
+        self.parser.add_argument('task_id', help="Task ID (1, 2.4, etc)")
+
+    def run(self, args):
+        task = self.todotxt.get(args.task_id)
+        if task:
+            # print args.task_id, task._make_string(include_subtasks=False)
+            new_task = task.clone()
+            new_task.completed = False
+            if new_task.rrule:
+                new_task.due = new_task.rrule.after(new_task.due or pendulum.utcnow())
+            for rule in new_task.rrule._rrule + new_task.rrule._exrule:
+                rule._dtstart = new_task.due
+            self.todotxt.append(new_task)
+            self.todotxt.print_tasks()
+            self.todotxt.save()
         else:
             sys.stderr.write("No such task\n")
 
