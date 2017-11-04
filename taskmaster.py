@@ -343,6 +343,10 @@ class TMTodoTxt(TodoTxt):
         self._print_task_list(self.tasks)
 
 
+class CommandError(Exception):
+    pass
+
+
 class Command(object):
     '''\
     Base command.
@@ -393,21 +397,14 @@ class Command(object):
 
     def __call__(self, args):
         parsed_args = self.parser.parse_args(args)
-        self.run(parsed_args)
+        try:
+            return self.run(parsed_args) or 0
+        except CommandError as e:
+            sys.stderr.write(str(e) + '\n')
+            return 1
 
     def run(self, args):
         raise NotImplementedError()
-
-
-class ListCommand(Command):
-    '''\
-    List tasks.
-
-    Print a list of tasks.
-    '''
-
-    def run(self, args):
-        self.todotxt.print_tasks()
 
 
 class _WrappedCommand(object):
@@ -424,13 +421,22 @@ class _SingleTaskCommand(_WrappedCommand):
     def run_wrapper(self, run):
         def wrapped(args):
             task = self.todotxt.get(args.task_id)
-            if task:
-                args.task = task
-                return run(args)
-            else:
-                sys.stderr.write("No such task\n")
-                return 1
+            if not task:
+                raise CommandError("No such task")
+            args.task = task
+            return run(args)
         return wrapped
+
+
+class ListCommand(Command):
+    '''\
+    List tasks.
+
+    Print a list of tasks.
+    '''
+
+    def run(self, args):
+        self.todotxt.print_tasks()
 
 
 class ShowCommand(_SingleTaskCommand, Command):
@@ -444,7 +450,7 @@ class ShowCommand(_SingleTaskCommand, Command):
         print args.task.id, args.task._make_string(include_subtasks=False)
 
 
-class NextCommand(Command):
+class NextCommand(_SingleTaskCommand, Command):
     '''\
     Add the next instance of a recurring task.
 
@@ -452,20 +458,17 @@ class NextCommand(Command):
     '''
 
     def run(self, args):
-        task = self.todotxt.get(args.task_id)
-        if task:
-            # print args.task_id, task._make_string(include_subtasks=False)
-            new_task = task.clone()
-            new_task.completed = False
-            if new_task.rrule:
-                new_task.due = new_task.rrule.after(new_task.due or pendulum.utcnow())
-            for rule in new_task.rrule._rrule + new_task.rrule._exrule:
-                rule._dtstart = new_task.due
-            self.todotxt.append(new_task)
-            self.todotxt.print_tasks()
-            self.todotxt.save()
-        else:
-            sys.stderr.write("No such task\n")
+        if not args.task.rrule:
+            raise CommandError("The task does not recur")
+        new_task = args.task.clone()
+        new_task.completed = False
+        if new_task.rrule:
+            new_task.due = new_task.rrule.after(new_task.due or pendulum.utcnow())
+        for rule in new_task.rrule._rrule + new_task.rrule._exrule:
+            rule._dtstart = new_task.due
+        self.todotxt.append(new_task)
+        self.todotxt.print_tasks()
+        self.todotxt.save()
 
 
 class AddCommand(Command):
@@ -527,7 +530,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    # t = TodoTxt('~/todo.txt')
-    # for task in t.tasks:
-    #     print task.id, str(task)
+    sys.exit(main() or 0)
