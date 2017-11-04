@@ -428,6 +428,26 @@ class _SingleTaskCommand(_WrappedCommand):
         return wrapped
 
 
+def _EditingCommand(desc_as_flag=False, with_subtask=True):
+    class _EditingCommandImpl(object):
+        def add_parser_args(self):
+            if desc_as_flag:
+                self.parser.add_argument('-d', '--description', help="Task description.  Todo.txt projects, contexts, and tags in the description will be parsed.")
+            else:
+                self.parser.add_argument('description', help="Task description.  Todo.txt projects, contexts, and tags in the description will be parsed.")
+            self.parser.add_argument('-C', '--complete', action='store_true', help="Mark the task as complete")
+            self.parser.add_argument('-P', '--priority', help="Task priority (A-Z)", type=lambda v: 26 - (ord(v) - 65))
+            self.parser.add_argument('--created', help="Alternate created date (YYYY-MM-DD)")
+            self.parser.add_argument('--completed', help="Completed date (YYYY-MM-DD)")
+            self.parser.add_argument('-p', '--project', action='append', help="Specify a project that this task belongs to")
+            self.parser.add_argument('-c', '--context', action='append', help="Specify a context that this task belongs to")
+            self.parser.add_argument('-t', '--tag', nargs=2, action='append', help="Specify a key and value of a tag to add to this task", metavar=('KEY', 'VALUE'))
+            if with_subtask:
+                self.parser.add_argument('-s', '--subtask-of', help="Create this task as a subtask of another task")
+            super(_EditingCommandImpl, self).add_parser_args()
+    return _EditingCommandImpl
+
+
 class ListCommand(Command):
     '''\
     List tasks.
@@ -445,6 +465,10 @@ class ShowCommand(_SingleTaskCommand, Command):
 
     Show a single task.
     '''
+
+    @classmethod
+    def command_names(self):
+        return ['show', 's']
 
     def run(self, args):
         print args.task.id, args.task._make_string(include_subtasks=False)
@@ -471,7 +495,7 @@ class NextCommand(_SingleTaskCommand, Command):
         self.todotxt.save()
 
 
-class AddCommand(Command):
+class AddCommand(_EditingCommand(), Command):
     '''\
     Add a new task.
     '''
@@ -480,20 +504,7 @@ class AddCommand(Command):
     def command_names(self):
         return ['add', 'a']
 
-    def add_parser_args(self):
-        self.parser.add_argument('description', help="Task description.  Todo.txt projects, contexts, and tags in the description will be parsed.")
-        self.parser.add_argument('-C', '--complete', action='store_true', help="Mark the task as complete")
-        self.parser.add_argument('-P', '--priority', help="Task priority (A-Z)")
-        self.parser.add_argument('--created', help="Alternate created date (YYYY-MM-DD)")
-        self.parser.add_argument('--completed', help="Completed date (YYYY-MM-DD)")
-        self.parser.add_argument('-p', '--project', action='append', help="Specify a project that this task belongs to")
-        self.parser.add_argument('-c', '--context', action='append', help="Specify a context that this task belongs to")
-        self.parser.add_argument('-t', '--tag', nargs=2, action='append', help="Specify a key and value of a tag to add to this task", metavar=('KEY', 'VALUE'))
-        self.parser.add_argument('-s', '--subtask-of', help="Create this task as a subtask of another task")
-
     def run(self, args):
-        if args.priority:
-            args.priority = 26 - (ord(args.priority) - 65)
         task = TMTask(
             args.description,
             completed=args.complete,
@@ -510,6 +521,38 @@ class AddCommand(Command):
         else:
             self.todotxt.append(task)
         self.todotxt.print_tasks()
+        self.todotxt.save()
+
+class EditCommand(_SingleTaskCommand, _EditingCommand(desc_as_flag=True, with_subtask=False), Command):
+    '''\
+    Edit a task.
+    '''
+
+    @classmethod
+    def command_names(self):
+        return ['edit', 'e']
+
+    def run(self, args):
+        args.task.description = args.description or args.task.description
+        args.task.completed = args.complete or args.task.completed
+        args.task.priority = args.priority or args.task.priority
+        args.task.created_at = args.created or args.task.created_at
+        args.task.completed_at = args.completed or args.task.completed_at
+
+        # TODO: remove projects
+        if args.project:
+            for project in args.project:
+                args.task.projects.append(project)
+        # TODO: remove contexts
+        if args.context:
+            for context in args.context:
+                args.task.contexts.append(context)
+        # TODO: remove tags
+        if args.tag:
+            for key, value in args.tag:
+                args.task.tags[key] = value
+
+        print args.task._make_string(include_subtasks=False)
         self.todotxt.save()
 
 
