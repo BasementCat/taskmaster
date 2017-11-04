@@ -351,7 +351,12 @@ class Command(object):
     '''
 
     def __init__(self, prog, config):
-        self.parser = argparse.ArgumentParser(prog=prog + ' ' + self.command_name(), description=self.command_doc(), formatter_class=argparse.RawDescriptionHelpFormatter)
+        names = self.command_names()
+        if len(names) > 1:
+            names = '{{{}}}'.format(','.join(names))
+        else:
+            names = names[0]
+        self.parser = argparse.ArgumentParser(prog=prog + ' ' + names, description=self.command_doc(), formatter_class=argparse.RawDescriptionHelpFormatter)
         self.add_parser_args()
         self.config = config
         self.todotxt = TMTodoTxt(config['todo.txt'])
@@ -360,8 +365,8 @@ class Command(object):
         pass
 
     @classmethod
-    def command_name(self):
-        return self.__name__[:-7].lower()
+    def command_names(self):
+        return [self.__name__[:-7].lower()]
 
     @classmethod
     def command_doc(self):
@@ -378,7 +383,11 @@ class Command(object):
         while queue:
             cls = queue.pop()
             if cls is not self:
-                out[cls.command_name()] = cls(prog, config)
+                names = list(filter(lambda v: not v.startswith('_'), cls.command_names()))
+                if names:
+                    instance = cls(prog, config)
+                    for name in names:
+                        out[name] = instance
             queue += cls.__subclasses__()
         return out
 
@@ -401,30 +410,46 @@ class ListCommand(Command):
         self.todotxt.print_tasks()
 
 
-class ShowCommand(Command):
+class _WrappedCommand(object):
+    def __init__(self, *args, **kwargs):
+        self.run = self.run_wrapper(self.run)
+        super(_WrappedCommand, self).__init__(*args, **kwargs)
+
+
+class _SingleTaskCommand(_WrappedCommand):
+    def add_parser_args(self):
+        self.parser.add_argument('task_id', help="Task ID (1, 2.4, etc)")
+        super(_SingleTaskCommand, self).add_parser_args()
+
+    def run_wrapper(self, run):
+        def wrapped(args):
+            task = self.todotxt.get(args.task_id)
+            if task:
+                args.task = task
+                return run(args)
+            else:
+                sys.stderr.write("No such task\n")
+                return 1
+        return wrapped
+
+
+class ShowCommand(_SingleTaskCommand, Command):
     '''\
     Show a task.
 
     Show a single task.
     '''
 
-    def add_parser_args(self):
-        self.parser.add_argument('task_id', help="Task ID (1, 2.4, etc)")
-
     def run(self, args):
-        task = self.todotxt.get(args.task_id)
-        if task:
-            print args.task_id, task._make_string(include_subtasks=False)
-        else:
-            sys.stderr.write("No such task\n")
+        print args.task.id, args.task._make_string(include_subtasks=False)
 
 
 class NextCommand(Command):
     '''\
-    '''
+    Add the next instance of a recurring task.
 
-    def add_parser_args(self):
-        self.parser.add_argument('task_id', help="Task ID (1, 2.4, etc)")
+    Clone the given task, and add it to the task list (uncompleted) with its due date set to the next recurring date.
+    '''
 
     def run(self, args):
         task = self.todotxt.get(args.task_id)
@@ -447,6 +472,10 @@ class AddCommand(Command):
     '''\
     Add a new task.
     '''
+
+    @classmethod
+    def command_names(self):
+        return ['add', 'a']
 
     def add_parser_args(self):
         self.parser.add_argument('description', help="Task description.  Todo.txt projects, contexts, and tags in the description will be parsed.")
@@ -485,7 +514,10 @@ def main():
     config = Config()
     commands = Command.subcommands(sys.argv[0], config)
 
-    command_list = '\n'.join(['{} - {}'.format(name, c.command_doc_oneline()) for name, c in commands.items()])
+    command_name_groups = {}
+    for name, c in commands.items():
+        command_name_groups.setdefault(c, []).append(name)
+    command_list = '\n'.join(['{} - {}'.format(', '.join(names), c.command_doc_oneline()) for c, names in command_name_groups.items()])
 
     parser = argparse.ArgumentParser(description="Manage a task list", epilog="Available commands:\n" + command_list, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('command', nargs='?', help="Command to run", default='list', choices=commands.keys())
