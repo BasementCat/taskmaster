@@ -448,6 +448,7 @@ def _EditingCommand(desc_as_flag=False, with_subtask=True):
             self.parser.add_argument('-t', '--tag', nargs=2, action='append', help="Specify a key and value of a tag to add to this task", metavar=('KEY', 'VALUE'))
             if with_subtask:
                 self.parser.add_argument('-s', '--subtask-of', help="Create this task as a subtask of another task")
+            self.parser.add_argument('--due', help="Due date (YYYY-MM-DD)", type=parse_date)
             super(_EditingCommandImpl, self).add_parser_args()
     return _EditingCommandImpl
 
@@ -520,6 +521,8 @@ class AddCommand(_EditingCommand(), Command):
             tags=dict(args.tag) if args.tag else None,
             parse_description=True,
         )
+        if args.due:
+            task.due = args.due
         if args.subtask_of:
             self.todotxt.get(args.subtask_of).append(task)
         else:
@@ -555,6 +558,9 @@ class EditCommand(_SingleTaskCommand, _EditingCommand(desc_as_flag=True, with_su
         if args.tag:
             for key, value in args.tag:
                 args.task.tags[key] = value
+
+        if args.due:
+            args.task.due = args.due
 
         print args.task._make_string(include_subtasks=False)
         self.todotxt.save()
