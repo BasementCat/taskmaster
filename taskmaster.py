@@ -21,6 +21,16 @@ def iso8601dt(dt):
     return dt.in_timezone('UTC').format('YYYY-MM-DD[T]HH:mm:ss[Z]')
 
 
+def parse_date(dt):
+    if not isinstance(dt, pendulum.pendulum.Pendulum):
+        dt = pendulum.parse(dt)
+    return dt.in_timezone('UTC').hour_(0).minute_(0).second_(0).microsecond_(0)
+
+
+def format_date(dt):
+    return dt.format('YYYY-MM-DD')
+
+
 def split_with_ws(data):
     out = []
     token = ''
@@ -154,16 +164,13 @@ class Task(object):
             line = self.ws_re.split(line, 1)[1]
             if self.date_re.match(line):
                 # 2 dates, first is completion, second is creation
-                # TODO: parse this
-                args['completed_at'] = date_1
-                # TODO: parse this
-                args['created_at'] = line[:10]
+                args['completed_at'] = parse_date(date_1)
+                args['created_at'] = parse_date(line[:10])
                 # TODO: abstract this
                 line = self.ws_re.split(line, 1)[1]
             else:
                 # 1 date, must be creation
-                # TODO: parse this
-                args['created_at'] = date_1
+                args['created_at'] = parse_date(date_1)
 
         # The rest is description but may include tags
         args['description'] = line
@@ -178,11 +185,9 @@ class Task(object):
         if self.priority is not None:
             out += '('  + chr((26 - self.priority) + 65) + ') '
         if self.completed_at:
-            # TODO: when parsed, format this
-            out += self.completed_at + ' '
+            out += format_date(self.completed_at) + ' '
         if self.created_at:
-            # TODO: when parsed, format this
-            out += self.created_at + ' '
+            out += format_date(self.created_at) + ' '
         out += self.description
         for project in self.projects:
             if '+' + project not in out:
@@ -267,7 +272,7 @@ class TMTask(TaskListMixin, Task):
 
     def __init__(self, *args, **kwargs):
         self.TAG_PARSERS = OrderedDict([
-            ('due', (pendulum.parse, iso8601dt)),
+            ('due', (parse_date, format_date)),
             ('rrule', (self._parse_rrule, self._str_rruleset)),
         ])
         self.subtasks = kwargs.pop('subtasks', [])
@@ -308,7 +313,6 @@ class TMTask(TaskListMixin, Task):
                 if tag in self.tags:
                     del self.tags[tag]
             else:
-                # import pudb;pudb.set_trace()
                 self.tags[tag] = stringifier(getattr(self, tag))
 
         out = super(TMTask, self).__str__()
@@ -437,8 +441,8 @@ def _EditingCommand(desc_as_flag=False, with_subtask=True):
                 self.parser.add_argument('description', help="Task description.  Todo.txt projects, contexts, and tags in the description will be parsed.")
             self.parser.add_argument('-C', '--complete', action='store_true', help="Mark the task as complete")
             self.parser.add_argument('-P', '--priority', help="Task priority (A-Z)", type=lambda v: 26 - (ord(v) - 65))
-            self.parser.add_argument('--created', help="Alternate created date (YYYY-MM-DD)")
-            self.parser.add_argument('--completed', help="Completed date (YYYY-MM-DD)")
+            self.parser.add_argument('--created', help="Alternate created date (YYYY-MM-DD)", type=parse_date)
+            self.parser.add_argument('--completed', help="Completed date (YYYY-MM-DD)", type=parse_date)
             self.parser.add_argument('-p', '--project', action='append', help="Specify a project that this task belongs to")
             self.parser.add_argument('-c', '--context', action='append', help="Specify a context that this task belongs to")
             self.parser.add_argument('-t', '--tag', nargs=2, action='append', help="Specify a key and value of a tag to add to this task", metavar=('KEY', 'VALUE'))
