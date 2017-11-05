@@ -109,7 +109,7 @@ class Task(object):
         self.description = description
         self.completed = completed
         self.priority = priority
-        self.created_at = created_at
+        self.created_at = created_at or pendulum.utcnow()
         self.completed_at = completed_at
         self.projects = projects or []
         self.contexts = contexts or []
@@ -246,11 +246,12 @@ class TMTask(TaskListMixin, Task):
 
     def _parse_rrule(self, value):
         rset = rrule.rruleset()
-        for candidate in value.split(';;'):
+        for candidate in value.split(';;;'):
+            candidate = candidate.replace(';;', '\n')
             if candidate.startswith('RRULE:'):
-                rset.rrule(rrule.rrulestr(candidate.replace(';', '\n'), dtstart=self.due or pendulum.utcnow()))
+                rset.rrule(rrule.rrulestr(candidate[6:], dtstart=self.due or pendulum.utcnow()))
             elif candidate.startswith('EXRULE:'):
-                rset.exrule(rrule.rrulestr('RRULE:' + candidate[7:].replace(';', '\n'), dtstart=self.due or pendulum.utcnow()))
+                rset.exrule(rrule.rrulestr('RRULE:' + candidate[7:], dtstart=self.due or pendulum.utcnow()))
             elif candidate.startswith('RDATE:'):
                 rset.rdate(pendulum.parse(candidate[6:]))
             elif candidate.startswith('EXDATE:'):
@@ -267,8 +268,8 @@ class TMTask(TaskListMixin, Task):
         ]
         for prefix, data in values:
             for v in data:
-                out.append(prefix + ':' + str(v).replace('\n', ';'))
-        return ';;'.join(out)
+                out.append(prefix + ':' + str(v).replace('\n', ';;'))
+        return ';;;'.join(out)
 
     def __init__(self, *args, **kwargs):
         self.TAG_PARSERS = OrderedDict([
@@ -329,6 +330,17 @@ class TMTask(TaskListMixin, Task):
         out = super(TMTask, self).clone()
         out.parse_tags()
         return out
+
+    def next(self):
+        if not self.rrule:
+            return None
+        new_task = self.clone()
+        new_task.completed = False
+        new_task.completed_at = None
+        new_task.due = pendulum.instance(new_task.rrule.after(new_task.due or pendulum.utcnow()))
+        for rule in new_task.rrule._rrule + new_task.rrule._exrule:
+            rule._dtstart = new_task.due
+        return new_task
 
 
 class TMTodoTxt(TodoTxt):
@@ -449,7 +461,30 @@ def _EditingCommand(desc_as_flag=False, with_subtask=True):
             if with_subtask:
                 self.parser.add_argument('-s', '--subtask-of', help="Create this task as a subtask of another task")
             self.parser.add_argument('--due', help="Due date (YYYY-MM-DD)", type=parse_date)
+            self.parser.add_argument('--recur', help="Recurrence period", choices=['daily', 'weekly', 'monthly', 'yearly'])
+            self.parser.add_argument('--recur-interval', help="Recurrence interval", type=int)
+            self.parser.add_argument('--recur-count', help="Recurrence count", type=int)
+            self.parser.add_argument('--recur-until', help="Recur until (YYYY-MM-DD)", type=parse_date)
             super(_EditingCommandImpl, self).add_parser_args()
+
+        def apply_recur(self, args, task):
+            if args.recur:
+                if not task.due:
+                    raise CommandError("Recurrence requires a due date")
+                if args.recur_count and args.recur_until:
+                    raise CommandError("Recurrence count and until date are mutually exclusive")
+                rule = 'RRULE:FREQ=' + args.recur.upper()
+                if args.recur_interval:
+                    rule += ';INTERVAL=' + str(args.recur_interval)
+                if args.recur_count:
+                    rule += ';COUNT=' + str(args.recur_count)
+                elif args.recur_until:
+                    rule += ';UNTIL=' + format_date(args.recur_until)
+                task.rrule = rrule.rrulestr(rule, dtstart=task.due, forceset=True)
+            else:
+                for arg in ('recur_interval', 'recur_count', 'recur_until'):
+                    if getattr(args, arg, None):
+                        raise CommandError("--{} requires --recur and --due".format(arg.replace('_', '-')))
     return _EditingCommandImpl
 
 
@@ -487,15 +522,33 @@ class NextCommand(_SingleTaskCommand, Command):
     '''
 
     def run(self, args):
-        if not args.task.rrule:
+        new_task = args.task.next()
+        if not new_task:
             raise CommandError("The task does not recur")
-        new_task = args.task.clone()
-        new_task.completed = False
-        if new_task.rrule:
-            new_task.due = new_task.rrule.after(new_task.due or pendulum.utcnow())
-        for rule in new_task.rrule._rrule + new_task.rrule._exrule:
-            rule._dtstart = new_task.due
         self.todotxt.append(new_task)
+        self.todotxt.print_tasks()
+        self.todotxt.save()
+
+
+class CompleteCommand(_SingleTaskCommand, Command):
+    '''\
+    Complete a task.
+
+    Mark a task as completed, adding the next instance of the task if it is a recurring task.
+    '''
+
+    @classmethod
+    def command_names(self):
+        return ['complete', 'c', 'x']
+
+    def run(self, args):
+        if args.task.completed:
+            raise CommandError("The task is already completed")
+        args.task.completed = True
+        args.task.completed_at = pendulum.utcnow()
+        new_task = args.task.next()
+        if new_task:
+            self.todotxt.append(new_task)
         self.todotxt.print_tasks()
         self.todotxt.save()
 
@@ -523,6 +576,7 @@ class AddCommand(_EditingCommand(), Command):
         )
         if args.due:
             task.due = args.due
+        self.apply_recur(args, task)
         if args.subtask_of:
             self.todotxt.get(args.subtask_of).append(task)
         else:
@@ -561,6 +615,8 @@ class EditCommand(_SingleTaskCommand, _EditingCommand(desc_as_flag=True, with_su
 
         if args.due:
             args.task.due = args.due
+
+        self.apply_recur(args, task)
 
         print args.task._make_string(include_subtasks=False)
         self.todotxt.save()
